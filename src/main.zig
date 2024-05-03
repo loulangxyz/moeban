@@ -1,37 +1,19 @@
 const std = @import("std");
+const User = struct { id: u64, age: u64 };
+
+const Schema = struct { a: []User, b: []User };
 
 fn Moeban(comptime T: type) type {
     return struct {
         db_name: []const u8,
         default_data: []const u8,
-        db_content: T,
-        allocator: std.mem.Allocator,
+        comptime schema: type = T,
 
-        fn init(db_name: []const u8, defultData: []const u8, allocator: std.mem.Allocator) !Moeban(T) {
-            if (try existsDataBase(db_name)) {
-                return .{
-                    .db_name = db_name,
-                    .default_data = defultData,
-                    .db_content = try parser(db_name, allocator),
-                    .allocator = allocator,
-                };
-            } else {
-                try createDataBase(db_name, defultData);
-                return .{
-                    .db_name = db_name,
-                    .default_data = defultData,
-                    .db_content = try parser(db_name, allocator),
-                    .allocator = allocator,
-                };
-            }
-            return error.NoSePudoIntanciar;
+        fn init(db_name: []const u8, default_data: []const u8) Moeban(T) {
+            return .{ .db_name = db_name, .default_data = default_data };
         }
 
-        fn deinit(this: @This()) void {
-            this.allocator.free(this.db_content);
-        }
-
-        pub fn existsDataBase(db_name: []const u8) !bool {
+        pub fn existsDataBase(_: @This(), db_name: []const u8) !bool {
             std.fs.cwd().access(db_name, .{ .mode = .read_only }) catch |err| {
                 if (err == error.FileNotFound) {
                     return false;
@@ -40,7 +22,7 @@ fn Moeban(comptime T: type) type {
             return true;
         }
 
-        pub fn createDataBase(db_name: []const u8, db_content: []const u8) !void {
+        pub fn createDataBase(_: @This(), db_name: []const u8, db_content: []const u8) !void {
             const file = std.fs.cwd().createFile(db_name, .{}) catch |err| {
                 std.debug.print("Could not create dababase Err:{}\n", .{err});
                 return;
@@ -54,7 +36,7 @@ fn Moeban(comptime T: type) type {
             std.debug.print("Database \"{s}\" was created\n", .{db_name});
         }
 
-        fn readDataBase(db_name: []const u8, allocator: std.mem.Allocator) ![]const u8 {
+        pub fn readDataBase(db_name: []const u8, allocator: std.mem.Allocator) ![]const u8 {
             const file = std.fs.cwd().readFileAlloc(allocator, db_name, std.math.maxInt(usize)) catch |err| {
                 std.debug.print("Could not read database {}\n", .{err});
                 return err;
@@ -67,7 +49,7 @@ fn Moeban(comptime T: type) type {
             return str;
         }
 
-        fn parser(db_name: []const u8, allocator: std.mem.Allocator) !T {
+        pub fn parser(_: @This(), db_name: []const u8, allocator: std.mem.Allocator) !T {
             const jsonData = try readDataBase(db_name, allocator);
             // defer allocator.free(jsonData);
             const parsedData = try std.json.parseFromSlice(T, allocator, jsonData, .{});
@@ -76,20 +58,24 @@ fn Moeban(comptime T: type) type {
     };
 }
 
-fn Model(comptime T: type) type {
+fn Model(comptime T: type, comptime MoebanType: type) type {
     return struct {
+        moeban: MoebanType,
         allocator: std.mem.Allocator,
-        fn init(allocator: std.mem.Allocator) !Model(T) {
-            return .{ .allocator = allocator };
+
+        fn init(moeban: MoebanType, allocator: std.mem.Allocator) !Model(T, MoebanType) {
+            if (!try moeban.existsDataBase(moeban.db_name)) try moeban.createDataBase(moeban.db_name, moeban.default_data);
+            return .{ .moeban = moeban, .allocator = allocator };
         }
 
-        fn compareById(context: @TypeOf(.{}), lhs: T, rhs: T) bool {
-            _ = context;
+        fn compareById(_: @TypeOf(.{}), lhs: T, rhs: T) bool {
             return lhs.id < rhs.id;
         }
 
-        pub fn findById(this: @This(), items: []T, id: u64) !T {
-            _ = this;
+        pub fn findById(this: @This(), comptime field: []const u8, id: u64) !T {
+            const arr_parsed = try this.moeban.parser(this.moeban.db_name, this.allocator);
+
+            const items = @field(arr_parsed, field);
 
             if (items.len == 0) {
                 return error.ItemNotFound;
@@ -115,77 +101,48 @@ fn Model(comptime T: type) type {
             return error.ItemNotFound;
         }
 
-        // // Función para agregar un nuevo usuario al array de manera ordenada
-        // pub fn addUser(this: @This(), items: []T, newUser: T) !void {
-        //     _ = this;
+        pub fn write(this: @This(), comptime schema: type, comptime field: []const u8, item: T) !void {
+            const arr_parsed = try this.moeban.parser(this.moeban.db_name, this.allocator);
 
-        //     // Encuentra la posición donde insertar el nuevo usuario para mantener el orden
-        //     var pos: usize = 0;
-        //     while (pos < items.len and items[pos].id < newUser.id) {
-        //         pos += 1;
-        //     }
+            const items = @field(arr_parsed, field);
 
-        //     // Inserta el nuevo usuario en la posición encontrada
-        //     try items.insert(pos, newUser);
-        // }
+            var arr = std.ArrayList(T).init(this.allocator);
+            defer arr.deinit();
+
+            try arr.resize(items.len);
+
+            @memcpy(arr.items, items);
+
+            try arr.append(item);
+
+            const jsonData = try std.json.stringifyAlloc(this.allocator, arr.items, .{});
+            defer this.allocator.free(jsonData);
+
+            const dbFile = try std.fs.cwd().openFile(this.moeban.db_name, .{});
+            defer dbFile.close();
+
+            const dbContentStr = try dbFile.readToEndAlloc(this.allocator, std.math.maxInt(usize));
+            defer this.allocator.free(dbContentStr);
+
+            var newObjectContent = try std.json.parseFromSlice(schema, this.allocator, dbContentStr, .{});
+            defer newObjectContent.deinit();
+
+            @field(newObjectContent.value, field) = arr.items;
+
+            const serializedDbContent = try std.json.stringifyAlloc(this.allocator, newObjectContent.value, .{});
+            defer this.allocator.free(serializedDbContent);
+
+            const updatedDataBase = try std.fs.cwd().openFile(this.moeban.db_name, .{ .mode = .read_write });
+            defer updatedDataBase.close();
+
+            try updatedDataBase.writeAll(serializedDbContent);
+
+            // std.debug.print("{s}\n", .{jsonData});
+        }
     };
 }
 
-const User = struct {
-    id: u64,
-    age: u64,
-    name: []const u8,
-};
-
-const Schema = struct { tarde: []User, noche: []User };
-
-const json_str =
-    \\ {
-    \\     "tarde":[],
-    \\     "noche":[]
-    \\ }
-;
-
-fn insertUser(allocator: std.mem.Allocator, items: []User, newUser: User) !void {
-    var arr = std.ArrayList(User).init(allocator);
-    defer arr.deinit();
-    try arr.resize(items.len);
-
-    @memcpy(arr.items, items);
-
-    try arr.append(newUser);
-
-    const jsonData = try std.json.stringifyAlloc(allocator, arr.items, .{});
-    defer allocator.free(jsonData);
-
-    const dbFile = try std.fs.cwd().openFile("db_test.json", .{});
-    defer dbFile.close();
-
-    const dbContentStr = try dbFile.readToEndAlloc(allocator, std.math.maxInt(usize));
-    defer allocator.free(dbContentStr);
-    // std.debug.print("{s}\n", .{dbContentStr});
-
-    var newObjectContent = try std.json.parseFromSlice(Schema, allocator, dbContentStr, .{});
-    defer newObjectContent.deinit();
-
-    @field(newObjectContent.value, "tarde") = arr.items;
-
-    // std.debug.print("{any}\n", .{newObjectContent.value});
-
-    const serializedDbContent = try std.json.stringifyAlloc(allocator, newObjectContent.value, .{});
-    defer allocator.free(serializedDbContent);
-
-    // std.debug.print("{s}\n", .{serializedDbContent});
-
-    const updatedDataBase = try std.fs.cwd().openFile("db_test.json", .{ .mode = .read_write });
-    defer updatedDataBase.close();
-
-    try updatedDataBase.writeAll(serializedDbContent);
-}
-
 pub fn main() !void {
-    // const allocator = std.heap.page_allocator;
-
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     const allocator = gpa.allocator();
 
@@ -201,15 +158,22 @@ pub fn main() !void {
 
     const arenaAllocator = arena.allocator();
 
-    const db = try Moeban(Schema).init("db_test.json", json_str, arenaAllocator);
-    const model = try Model(User).init(arenaAllocator);
+    const default_data =
+        \\ {
+        \\     "a":[],
+        \\     "b":[]
+        \\ }
+    ;
 
-    _ = model;
+    const MoebanSchema = Moeban(Schema);
+    const moeban = MoebanSchema.init("db_test.json", default_data);
+    const model = try Model(User, MoebanSchema).init(moeban, arenaAllocator);
 
-    // const user = try model.findById(db.db_content.tarde, 1);
-    // std.debug.print("{}\n", .{user});
+    const item = User{ .id = 2, .age = 22 };
+    try model.write(Schema, "b", item);
 
-    const newUser = User{ .id = 3, .age = 34, .name = "lucas" };
+    const id = try model.findById("a", 2);
+    std.debug.print("{}\n", .{id});
 
-    try insertUser(allocator, db.db_content.tarde, newUser);
+    // _ = model;
 }
