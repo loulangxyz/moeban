@@ -51,21 +51,22 @@ This file contains an example of how to use the Moeban database, showing how bas
 const Schema = struct { items: []User }; // Define your schema 
 const default_data = \{ "items": [] }\; // Default data in JSON format
 
-var gpa = std.heap.GeneralPurposeAllocator(.{}){}; const allocator = gpa.allocator();
+var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+const allocator = gpa.allocator();
 
 const moeban = try Moeban(Schema, User).init("test.json", default_data, allocator);
 ```
 
 ### Writing Data
 ```zig
-try moeban.write("items",.{.id = 1,.name = "John Doe",.age = 30 });
+try moeban.write("items", .{.id = 1, .name = "John Doe", .age = 30 });
 ```
 
 ### Finding Data
 ```zig
 const user = try moeban.findById("items", 1); 
 defer allocator.free(user.data); 
-std.debug.print("{}\n",.{user.item});
+std.debug.print("{}\n", .{user.item});
 ```
 
 ### Deleting Data
@@ -84,7 +85,7 @@ try moeban.writeMany("others", users.items);
 
 ### Deleting Users Based on a Condition
 ```zig 
-try moeban.deleteMany("others", "age", .{.Number = 22 }); // or String = "22"
+try moeban.deleteMany("others", "age", .{ .Number = 22 }); // or String = "22"
 ```
 
 ## Considerations
