@@ -47,7 +47,8 @@ This file contains an example of how to use the Moeban database, showing how bas
 
 ---
 
-```zig 
+```zig
+const User = struct { id: u64, name: []const u8, age: u64 };
 const Schema = struct { items: []User }; // Define your schema 
 const default_data = \{ "items": [] }\; // Default data in JSON format
 
