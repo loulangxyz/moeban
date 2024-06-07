@@ -59,7 +59,7 @@ const moeban = try Moeban(Schema, User).init("test.json", default_data, allocato
 
 ### Writing Data
 ```zig
-try moeban.write("items", .{.id = 1, .name = "John Doe", .age = 30 });
+try moeban.write("items", .{ .id = 1, .name = "John Doe", .age = 30 });
 ```
 
 ### Finding Data
